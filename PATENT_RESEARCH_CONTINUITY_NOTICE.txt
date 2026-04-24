@@ -1,0 +1,56 @@
+PATENT / RESEARCH CONTINUITY NOTICE
+
+Author / Inventor: Joshua L. Lopez
+Associated Public Artifact: Lopez Logical Qubit / Quikbit Array Public Cirq Simulation Demonstration
+Status: Patent Pending
+Copyright: © 2026 Joshua L. Lopez. All Rights Reserved.
+
+PURPOSE
+
+This notice identifies the broader patent-pending research lineage associated with the public Cirq simulation artifact titled:
+
+"Lopez Logical Qubit / Quikbit Array — Public Cirq Simulation Demonstration"
+
+The public Cirq simulation artifact is a bounded, non-enabling public demonstration. It is intended for public timestamping, review, and archival purposes only. It does not disclose the full protected inventions, implementation details, mathematical control rules, or production architecture.
+
+PATENT / IP NOTICE
+
+This public simulation artifact is associated with patent-pending work by Joshua L. Lopez, including but not limited to the Lopez Logical Qubit, the Quikbit Array, and related governed quantum-simulation architectures.
+
+Related protected filings and records shown by the inventor include:
+
+1. "Governed Quantum Subspace Stabilization Architecture: Viability-Constrained Logical Qubit Construction Using Adaptive Projection, Renormalization Control, and Spectral Trajectory Monitoring in Hilbert Space (The Lopez Logical Qubit)."
+
+2. "Governed Post-Collision Island Projection, Collision-Time Rescue Operator, and Governed Spectral Detection System."
+
+3. "Governed Post-Collision Island Projection, Collision-Time Rescue Operator, Governed Spectral Detection, and Threefold Cord Composition Operator for Superheavy Nuclear Governance."
+
+4. "Governed Double-Slit Nuclear Collision, Phase-Locked Wave-on-Wave Interference, and Threefold Cord Composition Operator for Superheavy Element Synthesis."
+
+5. "The Lopez Cosmological Constant Stabilization Theorem (LCCST): Systems and Methods for Topological Protection of the Cosmological Constant Against Perturbative Corrections via Contact-Geometric Governance Horizon Invariants on the Constitutional Hyperbolic Viability Manifold, and the Cosmological-Scale Rescue Operator for Quantized-Stabilization."
+
+RESEARCH CONTINUITY NOTE
+
+This public Cirq simulation artifact is part of a broader patent-pending research lineage by Joshua L. Lopez involving governed quantum state management, viability-constrained logical qubit construction, adaptive projection, renormalization control, spectral trajectory monitoring, post-collision island projection, collision-time rescue operators, governed spectral detection, Quikbit Array structures, Polaritron integration, and constitutional/temporal governance architectures.
+
+The public artifact is limited to a simplified Cirq-compatible demonstration and is not intended to disclose or enable the protected inventions.
+
+NON-ENABLING BOUNDARY
+
+This repository and public Cirq artifact are intentionally non-enabling. They do not disclose the full protected architecture, proprietary mathematical control rules, constitutional governance substrate, quantum substrate enforcement layer, temporal-control logic, Polaritron integration, sonoluminescence configuration, Rayleigh-Plesset governed form, superheavy nuclear governance implementation, collision-time rescue mechanics, spectral detection mechanics, production implementation, or any enabling trade-secret material.
+
+No inference should be made that the public simulation code contains the complete invention, the complete Lopez Logical Qubit construction, the complete Quikbit Array, or any full protected implementation.
+
+NO LICENSE GRANT
+
+No license is granted except for review, discussion, and execution of the included public demonstration code for non-commercial evaluation. All rights are reserved.
+
+SUGGESTED CITATION
+
+Lopez, Joshua L. "Patent / Research Continuity Notice for Lopez Logical Qubit / Quikbit Array Public Cirq Simulation Demonstration." Public non-enabling research-continuity notice, 2026. Patent pending.
+
+DISCLAIMER
+
+This notice is provided for informational, archival, attribution, and public-boundary purposes only. It does not constitute legal advice, patent prosecution advice, investment advice, technical certification, or a complete patent disclosure. Publication decisions should be reviewed with qualified patent counsel where appropriate.
+
+END OF NOTICE
