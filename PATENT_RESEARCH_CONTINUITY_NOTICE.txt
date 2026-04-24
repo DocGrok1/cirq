@@ -1,5 +1,5 @@
 PATENT / RESEARCH CONTINUITY NOTICE
-
+ 
 Author / Inventor: Joshua L. Lopez
 Associated Public Artifact: Lopez Logical Qubit / Quikbit Array Public Cirq Simulation Demonstration
 Status: Patent Pending
