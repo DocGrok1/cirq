@@ -106,7 +106,9 @@ def _inference_targets():
     targets = []
     for key, path in (
         ("VENUS_INFERENCE_URL", "/api/venus-inference"),
-        ("GGUF_INFERENCE_URL", "/brain"),
+        # Permanent local-language cord: Aura115 /api/aura-voice talks directly
+        # to the already-running GGUF listener and does not depend on /brain.
+        ("GGUF_INFERENCE_URL", "/api/aura-voice"),
         ("AURA116_INFERENCE_URL", "/api/webb-inference"),
         ("CLAUDIA_INFERENCE_URL", "/api/governed-claude-chat"),
     ):
