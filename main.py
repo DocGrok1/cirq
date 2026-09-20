@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
@@ -18,8 +20,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 BACKEND_URL = os.environ.get("GOVERNED_BACKEND_URL", "").rstrip("/")
+ROUTE_TIMEOUT = max(2.0, float(os.environ.get("CIRQ_ROUTE_TIMEOUT", "18")))
+GLOBAL_INFERENCE_TIMEOUT = max(3.0, float(os.environ.get("CIRQ_GLOBAL_INFERENCE_TIMEOUT", "20")))
 
-app = FastAPI(title="DCGP CIRQ Governed Quantum Service", version="1.1.0")
+app = FastAPI(title="DCGP CIRQ Governed Quantum Service", version="1.2.0")
 
 
 def _call_backend(path: str, method: str = "GET", payload=None):
@@ -120,21 +124,24 @@ def _call_url(url: str, payload):
         headers={"Content-Type": "application/json", "x-aura-source": "cirq-inference"},
         method="POST",
     )
+    started = time.monotonic()
     try:
-        with urlrequest.urlopen(req, timeout=35) as response:
+        with urlrequest.urlopen(req, timeout=ROUTE_TIMEOUT) as response:
             raw = response.read().decode("utf-8")
             try:
-                return response.status, json.loads(raw) if raw else {}
+                data = json.loads(raw) if raw else {}
             except Exception:
-                return response.status, {"ok": False, "reply": raw}
+                data = {"ok": False, "reply": raw}
+            return response.status, data, int((time.monotonic() - started) * 1000)
     except HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         try:
-            return exc.code, json.loads(raw) if raw else {}
+            data = json.loads(raw) if raw else {}
         except Exception:
-            return exc.code, {"ok": False, "reply": raw}
+            data = {"ok": False, "reply": raw}
+        return exc.code, data, int((time.monotonic() - started) * 1000)
     except (URLError, TimeoutError, OSError):
-        return 503, {"ok": False}
+        return 503, {"ok": False}, int((time.monotonic() - started) * 1000)
 
 
 def _usable_reply(data):
@@ -168,22 +175,59 @@ async def inference(request: Request):
         "source": "cirq-production-inference",
     })
 
-    for route_name, url in _inference_targets():
-        status, data = _call_url(url, routed_payload)
-        reply = _usable_reply(data)
-        attempts.append({"route": route_name, "status": status, "answered": bool(reply)})
-        if reply:
-            return {
-                "ok": True,
-                "service": "cirq",
-                "mode": "CIRQ_INFERENCE_ROUTER",
-                "provider": route_name.lower(),
-                "reply": reply,
-                "response": reply,
-                "cirq_inference": receipt,
-                "attempts": attempts,
-                "governed": True,
-            }
+    targets = _inference_targets()
+    if targets:
+        executor = ThreadPoolExecutor(max_workers=len(targets), thread_name_prefix="cirq-route")
+        futures = {
+            executor.submit(_call_url, url, routed_payload): (route_name, url)
+            for route_name, url in targets
+        }
+        deadline = time.monotonic() + GLOBAL_INFERENCE_TIMEOUT
+        try:
+            for future in as_completed(futures, timeout=GLOBAL_INFERENCE_TIMEOUT):
+                route_name, _ = futures[future]
+                try:
+                    status, data, elapsed_ms = future.result()
+                except Exception:
+                    status, data, elapsed_ms = 503, {"ok": False}, 0
+                reply = _usable_reply(data)
+                attempts.append({
+                    "route": route_name,
+                    "status": status,
+                    "answered": bool(reply),
+                    "elapsed_ms": elapsed_ms,
+                })
+                if reply:
+                    for pending in futures:
+                        if pending is not future:
+                            pending.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return {
+                        "ok": True,
+                        "service": "cirq",
+                        "mode": "CIRQ_INFERENCE_MESH",
+                        "provider": route_name.lower(),
+                        "reply": reply,
+                        "response": reply,
+                        "cirq_inference": receipt,
+                        "attempts": attempts,
+                        "governed": True,
+                    }
+                if time.monotonic() >= deadline:
+                    break
+        except FuturesTimeout:
+            pass
+        finally:
+            for pending, (route_name, _) in futures.items():
+                if not pending.done():
+                    pending.cancel()
+                    attempts.append({
+                        "route": route_name,
+                        "status": 504,
+                        "answered": False,
+                        "elapsed_ms": int(GLOBAL_INFERENCE_TIMEOUT * 1000),
+                    })
+            executor.shutdown(wait=False, cancel_futures=True)
 
     return JSONResponse(
         content={
