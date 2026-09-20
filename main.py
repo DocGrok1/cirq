@@ -102,6 +102,7 @@ def _inference_targets():
     targets = []
     for key, path in (
         ("VENUS_INFERENCE_URL", "/api/venus-inference"),
+        ("GGUF_INFERENCE_URL", "/brain"),
         ("AURA116_INFERENCE_URL", "/api/webb-inference"),
         ("CLAUDIA_INFERENCE_URL", "/api/governed-claude-chat"),
     ):
