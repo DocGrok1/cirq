@@ -78,29 +78,99 @@ def _cirq_inference_receipt(message: str):
     import cirq
     import hashlib
     import math
+    import numpy as np
+
+    # CAP-22 retrofit: preserve the original two-wire idea, but each wire is
+    # an 11-qubit HOT rail. The dense statevector is therefore 22 qubits
+    # (2^22 amplitudes), not the 1740Q outer GridQ/MPS register.
+    GOV_ANGLE = 1.941611038725467
+    PHI_RESTORING = 0.1
+    CAPACITOR_PHASE = math.pi / 4.0
+    SHOTS = 64
 
     digest = hashlib.sha256(message.encode("utf-8")).digest()
-    q0, q1 = cirq.LineQubit.range(2)
-    phase_a = (digest[0] / 255.0) * math.pi
-    phase_b = (digest[1] / 255.0) * math.pi
-    circuit = cirq.Circuit(
-        cirq.H(q0),
-        cirq.CNOT(q0, q1),
-        cirq.rz(phase_a).on(q0),
-        cirq.rx(phase_b).on(q1),
-        cirq.measure(q0, q1, key="m"),
+    seed = int.from_bytes(digest[:4], "big")
+
+    h_minus = list(cirq.LineQubit.range(0, 11))
+    h_plus = list(cirq.LineQubit.range(11, 22))
+    qubits = h_minus + h_plus
+    circuit = cirq.Circuit()
+
+    # 11 HOT on each rail: X -> H -> RZ(pi/phi).
+    for q in qubits:
+        circuit.append(cirq.X(q))
+        circuit.append(cirq.H(q))
+        circuit.append(cirq.rz(GOV_ANGLE).on(q))
+
+    # Dual cross-rail CX seat from the existing CAP-22 manifest.
+    circuit.append(cirq.CNOT(h_minus[0], h_plus[0]))
+    circuit.append(cirq.CNOT(h_plus[0], h_minus[0]))
+
+    # capacitor_gate_1(CAPACITOR_PHASE) q11[0], q22_ext[0]
+    circuit.append(cirq.rz(CAPACITOR_PHASE).on(h_minus[0]))
+    circuit.append(cirq.CNOT(h_minus[0], h_plus[0]))
+    circuit.append(cirq.rz(-CAPACITOR_PHASE).on(h_plus[0]))
+    circuit.append(cirq.CNOT(h_minus[0], h_plus[0]))
+    circuit.append(cirq.rz(CAPACITOR_PHASE).on(h_plus[0]))
+
+    # capacitor_gate_2(CAPACITOR_PHASE) q22_ext[0], q11[0]
+    circuit.append(cirq.ry(CAPACITOR_PHASE).on(h_plus[0]))
+    circuit.append(cirq.CZ(h_plus[0], h_minus[0]))
+    circuit.append(cirq.ry(-CAPACITOR_PHASE).on(h_minus[0]))
+    circuit.append(cirq.CZ(h_plus[0], h_minus[0]))
+    circuit.append(cirq.ry(CAPACITOR_PHASE).on(h_minus[0]))
+
+    # Ring coupling on each 11-qubit HOT rail.
+    for i in range(10):
+        circuit.append(cirq.CZ(h_minus[i], h_minus[i + 1]))
+        circuit.append(cirq.CZ(h_plus[i], h_plus[i + 1]))
+    circuit.append(cirq.CZ(h_minus[10], h_minus[0]))
+    circuit.append(cirq.CZ(h_plus[10], h_plus[0]))
+
+    # Restoring pass on all 22 HOT qubits.
+    for q in qubits:
+        circuit.append(cirq.rx(PHI_RESTORING).on(q))
+
+    simulator = cirq.Simulator(dtype=np.complex64, seed=seed)
+    sim_result = simulator.simulate(circuit, qubit_order=qubits)
+    state = sim_result.final_state_vector
+
+    # Sample directly from the computed 22Q statevector so we do not run a
+    # second state evolution just to obtain a compact receipt.
+    samples = cirq.sample_state_vector(
+        state,
+        indices=list(range(22)),
+        repetitions=SHOTS,
+        seed=seed,
     )
-    result = cirq.Simulator(seed=int.from_bytes(digest[:4], "big")).run(circuit, repetitions=64)
-    counts = {str(k): int(v) for k, v in result.histogram(key="m").items()}
+    counts = {}
+    for row in samples:
+        bitstring = "".join(str(int(bit)) for bit in row)
+        counts[bitstring] = counts.get(bitstring, 0) + 1
+
+    norm = float(np.vdot(state, state).real)
     return {
         "engine": "cirq",
-        "mode": "CIRQ_INFERENCE",
-        "circuit": str(circuit),
-        "shots": 64,
+        "mode": "CIRQ_CAP22_TWIN_RAIL_STATEVECTOR",
+        "compiler": "CAP-22",
+        "rails": {
+            "H-": {"hot_qubits": 11, "indices": [0, 10]},
+            "H+": {"hot_qubits": 11, "indices": [11, 21]},
+        },
+        "active_qubits": 22,
+        "statevector_amplitudes": int(state.size),
+        "statevector_bytes": int(state.nbytes),
+        "statevector_norm": norm,
+        "outer_register": {
+            "qubits": 1740,
+            "dense_statevector": False,
+            "role": "GridQ/MPS/addressing/governance",
+        },
+        "shots": SHOTS,
         "counts": counts,
+        "operation_count": sum(1 for _ in circuit.all_operations()),
         "input_hash": hashlib.sha256(message.encode("utf-8")).hexdigest(),
     }
-
 
 def _inference_targets():
     targets = []
