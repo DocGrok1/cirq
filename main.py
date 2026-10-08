@@ -10,7 +10,11 @@ embedded in this public service.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
+import math
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from urllib import request as urlrequest
@@ -22,11 +26,13 @@ from fastapi.responses import JSONResponse
 BACKEND_URL = os.environ.get("GOVERNED_BACKEND_URL", "").rstrip("/")
 ROUTE_TIMEOUT = max(2.0, float(os.environ.get("CIRQ_ROUTE_TIMEOUT", "18")))
 GLOBAL_INFERENCE_TIMEOUT = max(3.0, float(os.environ.get("CIRQ_GLOBAL_INFERENCE_TIMEOUT", "20")))
+P3Q_TRANSPORT_KEY = os.environ.get("JETBASE_P3Q_TRANSPORT_KEY", "").strip()
+_cap22_slots = threading.BoundedSemaphore(2)
 
 app = FastAPI(title="DCGP CIRQ Governed Quantum Service", version="1.2.0")
 
 
-def _call_backend(path: str, method: str = "GET", payload=None):
+def _call_backend(path: str, method: str = "GET", payload=None, timeout: float = 30):
     if not BACKEND_URL:
         return 503, {"ok": False, "error": "governed_backend_not_configured"}
 
@@ -40,7 +46,7 @@ def _call_backend(path: str, method: str = "GET", payload=None):
     )
 
     try:
-        with urlrequest.urlopen(req, timeout=30) as response:
+        with urlrequest.urlopen(req, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
             try:
                 data = json.loads(raw) if raw else {}
@@ -149,6 +155,7 @@ def _cirq_inference_receipt(message: str):
         counts[bitstring] = counts.get(bitstring, 0) + 1
 
     norm = float(np.vdot(state, state).real)
+    marginals = [float(np.mean(samples[:, i])) for i in range(6)]
     return {
         "engine": "cirq",
         "mode": "CIRQ_CAP22_TWIN_RAIL_STATEVECTOR",
@@ -168,8 +175,79 @@ def _cirq_inference_receipt(message: str):
         },
         "shots": SHOTS,
         "counts": counts,
+        "six_data_marginals": marginals,
         "operation_count": sum(1 for _ in circuit.all_operations()),
         "input_hash": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+    }
+
+
+def _bridge_authorized(request: Request):
+    provided = request.headers.get("x-aura-bridge-key", "")
+    return bool(P3Q_TRANSPORT_KEY and provided and hmac.compare_digest(provided, P3Q_TRANSPORT_KEY))
+
+@app.post("/governance/sweep")
+def governance_sweep(payload: dict, request: Request):
+    if not _bridge_authorized(request):
+        return JSONResponse(content={"ok":False,"error":"p3q_transport_authority_required"},status_code=403)
+    code,data=_call_backend('/governance/sweep','POST',payload,timeout=900)
+    return JSONResponse(content=data,status_code=code)
+
+
+@app.post("/cap22/statevector")
+def cap22_statevector(payload: dict, request: Request):
+    if not _bridge_authorized(request):
+        return JSONResponse(content={"ok": False, "error": "p3q_transport_authority_required"}, status_code=403)
+    message = _extract_message(payload).strip()
+    if not message or len(message) > 6000:
+        return JSONResponse(content={"ok": False, "error": "message_required_max_6000_characters"}, status_code=400)
+    with _cap22_slots:
+        receipt = _cirq_inference_receipt(message)
+    return {"ok": True, **receipt, "physical_claim": False}
+
+
+@app.post("/intake/gguf")
+def intake_gguf(packet: dict, request: Request):
+    if not _bridge_authorized(request):
+        return JSONResponse(content={"ok": False, "error": "p3q_transport_authority_required"}, status_code=403)
+    cap22 = packet.get("cap22", {})
+    probabilities = cap22.get("six_data_marginals")
+    gguf = packet.get("gguf", [])
+    if packet.get("oracle", {}).get("listener_port") != 14700 or not isinstance(probabilities, list) or len(probabilities) != 6 or any(
+        isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1 for v in probabilities
+    ) or not isinstance(gguf, list) or not gguf or any(not isinstance(g, dict) or not g.get("function") for g in gguf):
+        return JSONResponse(content={"ok": False, "error": "measured_cap22_and_actual_gguf_receipts_required"}, status_code=400)
+    norm = cap22.get("statevector_norm")
+    counts = cap22.get("counts", {})
+    valid_counts = isinstance(counts, dict) and bool(counts) and all(
+        isinstance(bits, str) and len(bits) == 22 and set(bits) <= {'0', '1'} and isinstance(n, int) and not isinstance(n, bool) and n > 0
+        for bits, n in counts.items()
+    ) and sum(counts.values()) == 64
+    if cap22.get("active_qubits") != 22 or cap22.get("shots") != 64 or not isinstance(norm, (int, float)) or not math.isfinite(norm) or abs(norm - 1.0) > 1e-4 or not valid_counts or any(
+        abs(probabilities[i] - sum(n for bits, n in counts.items() if bits[i] == '1') / 64) > 1e-12 for i in range(6)
+    ):
+        return JSONResponse(content={"ok": False, "error": "normalized_cap22_receipt_required"}, status_code=400)
+    canonical = json.dumps(packet, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    packet_hash = hashlib.sha256(canonical.encode()).hexdigest()
+    seed = int(packet_hash[:8], 16)
+    # Carry actual CAP-22 measured marginals into the existing private 9Q QHP
+    # preparation. The original QHP measurement-to-P3Q mapping and locked
+    # transition kernel remain the sole authority for admission and commitment.
+    code, native = _call_backend("/qhp/decoherence-fuel/fire", "POST", {
+        "coins": 1, "folds": 22, "shots": 256, "seed": seed, "body": probabilities, "include_svg": False
+    }, timeout=900)
+    if code >= 400 or native.get("ok") is not True:
+        return JSONResponse(content={"ok": False, "error": native.get("error", "native_p3q_evaluation_incomplete"), "committed": False, "native": native}, status_code=code if code >= 400 else 502)
+    receipts = [coin.get("receipt", {}) for coin in native.get("coins", [])]
+    if not receipts or any(not receipt.get("receipt_hash") or not receipt.get("evaluation_complete") for receipt in receipts):
+        return JSONResponse(content={"ok": False, "error": "complete_native_p3q_receipts_required", "committed": False}, status_code=502)
+    return {
+        "ok": True, "mode": "CAP22_GGUF_QHP_P3Q", "committed": all(receipt.get("committed") is True for receipt in receipts),
+        "packet_sha256": packet_hash, "native_p3q": native, "receipts": receipts,
+        "oracle": packet["oracle"], "position": packet.get("position"), "ohm": packet.get("ohm"),
+        "cap22": cap22, "cirq_11q": packet.get("cirq_11q"), "circ": packet.get("circ"),
+        "gguf": gguf, "frame": packet.get("frame"),
+        "measured_bridge": {"source": "CAP-22 first six sampled wires", "six_data_marginals": probabilities, "qhp_qubits": 9, "qhp_shots": 256},
+        "physical_claim": False
     }
 
 def _inference_targets():
@@ -385,3 +463,4 @@ if __name__ == "__main__":
 
     # Preserve the existing CIRQ Railway listen contract.
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
