@@ -193,6 +193,14 @@ def governance_sweep(payload: dict, request: Request):
     return JSONResponse(content=data,status_code=code)
 
 
+@app.post("/mc290/dense-rail/accept")
+def mc290_dense_rail_accept(payload: dict, request: Request):
+    if not _bridge_authorized(request):
+        return JSONResponse(content={"ok": False, "error": "p3q_transport_authority_required"}, status_code=403)
+    code, data = _call_backend("/mc290/dense-rail/accept", "POST", payload, timeout=900)
+    return JSONResponse(content=data, status_code=code)
+
+
 @app.post("/cap22/statevector")
 def cap22_statevector(payload: dict, request: Request):
     if not _bridge_authorized(request):
